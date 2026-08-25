@@ -1,15 +1,15 @@
-# Use an official Python runtime as a parent image
-FROM python:3.11.9-bookworm
+# Use an official Python runtime as a parent image (Alpine version)
+FROM python:3.11-alpine
 
 # Install necessary packages
-RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
+RUN apk update && apk add --no-cache curl ca-certificates
 
-# Add and run the UV installer script
+# Add and run the UV installer script, then move uv to a global path
 ADD https://astral.sh/uv/0.5.9/install.sh /uv-installer.sh
-RUN sh /uv-installer.sh && rm /uv-installer.sh
-
-# Set environment variables
-ENV PATH="/root/.local/bin/:$PATH"
+RUN sh /uv-installer.sh && \
+    mv /root/.local/bin/uv /usr/local/bin/uv && \
+    mv /root/.local/bin/uvx /usr/local/bin/uvx && \
+    rm /uv-installer.sh
 
 # Set working directory in the container to /app
 WORKDIR /app
@@ -25,8 +25,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # Add the rest of the application code
 ADD . /app
+
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev
 
-# Start the bot
-CMD ["uv", "run", "python", "run.py"]
+# Crea la cartella (se non esiste), assegna 1000:1000, poi avvia Python come root
+CMD mkdir -p /app/downloads && \
+    chown -R 1000:1000 /app/downloads && \
+    uv run python run.py

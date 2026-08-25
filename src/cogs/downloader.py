@@ -6,16 +6,11 @@ import platform
 import shutil
 import traceback
 
-from telegram import (
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    Update,
-)
+from telegram import Update
 from telegram.ext import ContextTypes, filters
 
 from ..middlewares.auth import auth_required
 from ..middlewares.handlers import (
-    callback_query_handler,
     command_handler,
     message_handler,
 )
@@ -67,163 +62,132 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await asyncio.sleep(0.3)
 
 
-@message_handler(filters.Document.VIDEO)
+@message_handler(filters.VIDEO | filters.Document.ALL | filters.PHOTO)
 @auth_required
 async def download(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Download the file sent by the user."""
-    logger.info("Download command received")
+    """Download the file sent by the user directly without confirmation."""
+
+    logger.info("Download command received - Starting direct download")
+
+    message = update.message
+    media = None
+    file_name = None
+
+    if message.document:
+        media = message.document
+        file_name = media.file_name
+    elif message.video:
+        media = message.video
+        file_name = getattr(media, "file_name", None) or f"video_{media.file_id}.mp4"
+    elif message.photo:
+        media = message.photo[-1]
+        file_name = f"photo_{media.file_id}.jpg"
+    
+    if not media:
+        await message.reply_text("Could not detect a valid file, video, or photo.")
+        return
+
+    file_id = media.file_id
+    file_name = file_name or f"file_{file_id}"  # Final fallback
+    file_size = getattr(media, "file_size", 0)
 
     try:
-        check_file_exists(
-            update.message.document.file_id, update.message.document.file_name
-        )
+        check_file_exists(file_id, file_name)
     except Exception as e:
         logger.error(f"Error checking file exists: {e}")
-        await update.message.reply_text(
+        await message.reply_text(
             f"⛔ File already exists\!\nError:```\n{e}```",
             parse_mode="MarkdownV2",
         )
         return
 
-    # File details
-    file_name = update.message.document.file_name
-    file_size = DownloadFile.convert_size(update.message.document.file_size)
-
-    response_message = (
-        f"Are you sure you want to download the file?\n\n"
-        f"> 📄 *File name:*   `{file_name}`\n"
-        f"> 💾 *File size:*   `{file_size}`\n"
+    # Add file to downloading_files
+    download_file = DownloadFile(
+        file_id,
+        file_name,
+        file_size,
     )
+    downloading_files[file_id] = download_file
 
-    # Confirmation message
-    await context.bot.send_message(
-        chat_id=update.message.chat_id,
-        text=response_message,
-        reply_to_message_id=update.message.message_id,
-        parse_mode="MarkdownV2",
-        reply_markup=InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton("Yes", callback_data="yes"),
-                    InlineKeyboardButton("No", callback_data="no"),
-                ]
-            ]
-        ),
-    )
+    # Send downloading message
+    status_msg = await message.reply_text("⬇️ Downloading file...")
 
+    try:
+        new_file = await get_file(context.bot, download_file)
+    except Exception as e:
+        logger.error(f"Error downloading file: {e}")
+        traceback.print_exc()
 
-@callback_query_handler()
-@auth_required
-async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle the confirmation button click for downloading the file."""
-    logger.info("Button command received")
-    query = update.callback_query
-
-    await query.answer()
-
-    # Replied to message
-    message = update.effective_message.reply_to_message
-    file_id = message.document.file_id
-    file_name = message.document.file_name
-    file_size = message.document.file_size
-
-    # Remove buttons from the message
-    await update.effective_message.edit_reply_markup(reply_markup=None)
-
-    if query.data == "yes":
-        logger.info("Downloading file...")
-
-        # Check if file already exists or is being downloaded
-        try:
-            check_file_exists(file_id, file_name)
-        except Exception as e:
-            logger.error(f"Error checking file exists: {e}")
-            await message.reply_text(f"⛔ Error checking if file exists\n```\n{e}```")
-            return
-
-        # Add file to downloading_files
-        download_file = DownloadFile(
-            file_id,
-            file_name,
-            file_size,
-        )
-        downloading_files[file_id] = download_file
-
-        # Send downloading message
-        await message.reply_text("⬇️ Downloading file...")
-
-        try:
-            new_file = await get_file(context.bot, download_file)
-        except Exception as e:
-            logger.error(f"Error downloading file: {e}")
-            traceback.print_exc()
-
-            # Remove from current downloading files
+        # Remove from current downloading files
+        if file_id in downloading_files:
             downloading_files.pop(file_id)
 
-            await message.reply_text(
+        await status_msg.edit_text(
+            (
+                f"⛔ Error downloading file\n"
+                f"> 📄 *File name:*   `{download_file.file_name}`\n"
+                f"> 💾 *File size:*   `{download_file.file_size_mb}`\n"
+                f"```\n{e}```"
+            ),
+            parse_mode="MarkdownV2",
+        )
+        return
+    else:
+        download_file.download_complete()
+
+    # Rename the file to the original file name
+    # file_path is relative, e.g. "videos/file_0.mp4" or "documents/file_1.txt"
+    current_file_path = os.path.join(BOT_API_DIR, TOKEN_SUB_DIR, new_file.file_path)
+    move_to_path = f"{DOWNLOAD_TO_DIR}{file_name}"
+
+    # Move the file to the download directory
+    try:
+        os.makedirs(DOWNLOAD_TO_DIR, exist_ok=True)
+        os.rename(current_file_path, move_to_path)
+    except Exception as rename_error:
+        logger.error(f"Error RENAMING file: {rename_error}")
+
+        # Move the file instead of renaming
+        try:
+            await asyncio.to_thread(shutil.move, current_file_path, move_to_path)
+        except Exception as move_error:
+            logger.error(f"Error MOVING file: {move_error}")
+
+            if file_id in downloading_files:
+                downloading_files.pop(file_id)
+            
+            await status_msg.edit_text(
                 (
-                    f"⛔ Error downloading file\n"
-                    f"> 📄 *File name:*   `{download_file.file_name}`\n"
-                    f"> 💾 *File size:*   `{download_file.file_size_mb}`\n"
-                    f"```\n{e}```"
+                    f"⛔ Error moving file\n"
+                    f"> 📂 *File path:*   `{new_file.file_path}`\n"
+                    f"> 📂 *Move to path:*   `{move_to_path}`\n"
+                    f"Rename error:\n```\n{rename_error}```\n"
+                    f"Move error:\n```\n{move_error}```"
                 ),
                 parse_mode="MarkdownV2",
             )
             return
-        else:
-            download_file.download_complete()
 
-        # Rename the file to the original file name
-        file_path = new_file.file_path.split("/")[-1]
-        current_file_path = f"{BOT_API_DIR}{TOKEN_SUB_DIR}/documents/{file_path}"
-        move_to_path = f"{DOWNLOAD_TO_DIR}{file_name}"
-
-        # Move the file to the download directory
-        try:
-            os.makedirs(DOWNLOAD_TO_DIR, exist_ok=True)
-            os.rename(current_file_path, move_to_path)
-        except Exception as rename_error:
-            logger.error(f"Error RENAMING file: {rename_error}")
-
-            # Move the file instead of renaming
-            try:
-                await asyncio.to_thread(shutil.move, current_file_path, move_to_path)
-            except Exception as move_error:
-                logger.error(f"Error MOVING file: {move_error}")
-
-                downloading_files.pop(file_id)
-                await message.reply_text(
-                    (
-                        f"⛔ Error moving file\n"
-                        f"> 📂 *File path:*   `{file_path}`\n"
-                        f"> 📂 *Move to path:*   `{move_to_path}`\n"
-                        f"Rename error:\n```\n{rename_error}```\n"
-                        f"Move error:\n```\n{move_error}```"
-                    ),
-                    parse_mode="MarkdownV2",
-                )
-                return
-
-        download_file.move_complete()
+    download_file.move_complete()
+    if file_id in downloading_files:
         downloading_files.pop(file_id)
 
-        # If linux, give file correct permissions
-        if platform.system() == "Linux":
-            os.chmod(move_to_path, 0o664)
+    # If linux, give file correct permissions
+    if platform.system() == "Linux":
+        try:
+            os.chown(move_to_path, 1000, 1000)
+        except Exception:
+            pass
 
-        response_message = (
-            f"✅ File downloaded successfully\\.\n\n"
-            f"> 📄 *File name:*   `{download_file.file_name}`\n"
-            f"> 📂 *File path:*   `{file_path}`\n"
-            f"> 💾 *File size:*   `{download_file.file_size_mb}`\n"
-            f"> 🔻 *Retries:*   `{download_file.download_retries}`\n"
-            f"> ⏱ *Download Duration:*   `{download_file.download_duration}`\n"
-            f"> ⏱ *Moving Duration:*   `{download_file.move_duration}`\n"
-            f"> ⏱ *Total Duration:*   `{download_file.total_duration}`"
-        )
+    response_message = (
+        f"✅ File downloaded successfully\\.\n\n"
+        f"> 📄 *File name:*   `{download_file.file_name}`\n"
+        f"> 📂 *File path:*   `{new_file.file_path}`\n"
+        f"> 💾 *File size:*   `{download_file.file_size_mb}`\n"
+        f"> 🔻 *Retries:*   `{download_file.download_retries}`\n"
+        f"> ⏱ *Download Duration:*   `{download_file.download_duration}`\n"
+        f"> ⏱ *Moving Duration:*   `{download_file.move_duration}`\n"
+        f"> ⏱ *Total Duration:*   `{download_file.total_duration}`"
+    )
 
-        await message.reply_text(response_message, parse_mode="MarkdownV2")
-    else:
-        logger.info("Download cancelled")
-        await message.reply_text("Download cancelled.")
+    await status_msg.edit_text(response_message, parse_mode="MarkdownV2")
