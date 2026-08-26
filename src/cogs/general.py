@@ -54,7 +54,6 @@ async def info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         parse_mode="markdown",
     )
 
-
 @command_handler("storage")
 async def storage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send available storage information and list files in the download folder."""
@@ -89,11 +88,13 @@ async def storage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                     
                     file_list_str += f"📄 `{f}` \\- `{size_str}`\n"
         else:
-            file_list_str = "\n\n*Files in directory:*\n(Empty)"
+            # FIX 1: Escape parentheses for MarkdownV2 using double backslashes
+            file_list_str = "\n\n*Files in directory:*\n\\(Empty\\)"
 
     except Exception as e:
         logger.error(f"Error listing files: {e}")
-        file_list_str = f"\n\nError listing files: {e}"
+        # FIX 2: Wrap the exception in backticks so unescaped special chars in the error don't break the parser
+        file_list_str = f"\n\n*Error listing files:*\n`{e}`"
 
     response_msg = (
         f"📂 *Folder*:   `{DOWNLOAD_TO_DIR}`\n"
@@ -111,13 +112,11 @@ async def storage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             f"🟣 *Total Space*:   `{total // (2**30)} GB`\n"
             f"🟠 *Used Space*:   `{used // (2**30)} GB`\n"
             f"🟢 *Free Space*:    `{free // (2**30)} GB`\n"
-            f"\nFile list is too long to display completely, showing partial list...",
+            # FIX 3: Escape periods for MarkdownV2
+            f"\nFile list is too long to display completely, showing partial list\\.\\.\\.",
             parse_mode="MarkdownV2",
         )
         # Send as much of the file list as possible, or just the first chunk
         await update.message.reply_text(file_list_str[:4000], parse_mode="MarkdownV2")
     else:
         await update.message.reply_text(response_msg, parse_mode="MarkdownV2")
-
-
-
