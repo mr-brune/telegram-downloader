@@ -130,7 +130,7 @@ async def _perform_download(bot, message, download_file: DownloadFile) -> None:
 
     try:
         status_msg = await message.reply_text(
-            f"⬇️ Download da Telegram\\.\\.\\.\n"
+            f"⬇️ Downloading from Telegram\\.\\.\\.\n"
             f"`{'░' * _PROGRESS_BAR_LEN}` `0%`\n"
             f"💾 `0 B / {_format_size(total_size)}`",
             parse_mode="MarkdownV2",
@@ -151,7 +151,7 @@ async def _perform_download(bot, message, download_file: DownloadFile) -> None:
             except Exception:
                 pass
 
-    # Monitoraggio fase 1: Download nel server locale Bot API
+    # Phase 1 Monitoring: Download to the local Bot API server
     known_files = _snapshot_files(token_dir)
     found_file: list[str | None] = [None]
 
@@ -166,7 +166,7 @@ async def _perform_download(bot, message, download_file: DownloadFile) -> None:
     monitor = asyncio.create_task(
         _monitor_file_growth(
             status_msg, total_size, _get_temp_path,
-            "⬇️ Download da Telegram\\.\\.\\."
+            "⬇️ Downloading from Telegram\\.\\.\\."
         )
     ) if status_msg else None
 
@@ -180,7 +180,7 @@ async def _perform_download(bot, message, download_file: DownloadFile) -> None:
         if file_id in downloading_files:
             downloading_files.pop(file_id)
         await _edit(
-            f"⛔ Errore durante il download\n"
+            f"⛔ Error during download\n"
             f"> 📄 *File name:*   `{download_file.file_name}`\n"
             f"```\n{e}```"
         )
@@ -199,7 +199,7 @@ async def _perform_download(bot, message, download_file: DownloadFile) -> None:
     dst_path = f"{DOWNLOAD_TO_DIR}{download_file.file_name}"
     os.makedirs(DOWNLOAD_TO_DIR, exist_ok=True)
 
-    # Provo rename atomico se nello stesso disco
+    # Try atomic rename if on the same disk
     try:
         os.rename(current_file_path, dst_path)
         download_file.move_complete()
@@ -213,18 +213,18 @@ async def _perform_download(bot, message, download_file: DownloadFile) -> None:
                 pass
 
         await _edit(
-            f"✅ Download completato\\.\n\n"
+            f"✅ Download complete\\.\n\n"
             f"> 📄 *File name:*   `{download_file.file_name}`\n"
             f"> 💾 *File size:*   `{download_file.file_size_mb}`\n"
-            f"> ⏱ *Totale:*   `{download_file.total_duration}`"
+            f"> ⏱ *Total:*   `{download_file.total_duration}`"
         )
         return
     except OSError:
-        pass  # Errore di rename cross-filesystem (verrà avviata la copia)
+        pass  # Cross-filesystem rename error (will start copy)
 
-    # Monitoraggio fase 2: Copia su un disco/filesystem diverso
+    # Phase 2 Monitoring: Copy to a different disk/filesystem
     await _edit(
-        f"📦 Copia in corso\\.\\.\\.\n"
+        f"📦 Copying\\.\\.\\.\n"
         f"`{'░' * _PROGRESS_BAR_LEN}` `0%`\n"
         f"💾 `0 B / {_format_size(total_size)}`"
     )
@@ -234,7 +234,7 @@ async def _perform_download(bot, message, download_file: DownloadFile) -> None:
     copy_monitor = asyncio.create_task(
         _monitor_file_growth(
             status_msg, total_size, lambda: dst_path,
-            "📦 Copia in corso\\.\\.\\."
+            "📦 Copying\\.\\.\\."
         )
     ) if status_msg else None
 
@@ -245,7 +245,7 @@ async def _perform_download(bot, message, download_file: DownloadFile) -> None:
         if file_id in downloading_files:
             downloading_files.pop(file_id)
         await _edit(
-            f"⛔ Errore copia file\n"
+            f"⛔ File copy error\n"
             f"```\n{copy_error}```"
         )
         return
@@ -268,11 +268,11 @@ async def _perform_download(bot, message, download_file: DownloadFile) -> None:
             pass
 
     await _edit(
-        f"✅ Download completato\\.\n\n"
+        f"✅ Download complete\\.\n\n"
         f"> 📄 *File name:*   `{download_file.file_name}`\n"
         f"> 💾 *File size:*   `{download_file.file_size_mb}`\n"
         f"> ⏱ *Download:*   `{download_file.download_duration}`\n"
-        f"> ⏱ *Totale:*   `{download_file.total_duration}`"
+        f"> ⏱ *Total:*   `{download_file.total_duration}`"
     )
 
 
@@ -327,7 +327,7 @@ async def download(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception as e:
         logger.error(f"Error checking file exists: {e}")
         await update.message.reply_text(
-            f"⛔ File già esistente\!\nError:```\n{e}```",
+            f"⛔ File already exists\\!\nError:```\n{e}```",
             parse_mode="MarkdownV2",
         )
         return
@@ -342,7 +342,7 @@ async def download(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if _download_lock.locked():
             try:
                 await message.reply_text(
-                    f"⏳ In coda\\.\n> 📄 *File:*   `{file_name}`",
+                    f"⏳ In queue\\.\n> 📄 *File:*   `{file_name}`",
                     parse_mode="MarkdownV2",
                 )
             except Exception as e:
